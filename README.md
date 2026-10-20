@@ -97,7 +97,7 @@ A normal request contains:
 ```json
 {
   "request_id": "r1",
-  "text": "Patient Garrett Russell, MRN-482731, reported anxiety. Garrett Russell will return in two weeks."
+  "text": "Patient Jordan Lee, MRN-482731, reported anxiety. Jordan Lee will return in two weeks."
 }
 ```
 
