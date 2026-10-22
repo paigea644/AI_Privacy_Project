@@ -6,130 +6,244 @@ This evaluation will determine whether the Psychiatric Note Privacy Gateway prot
 
 All tests will use synthetic, meaning completely fictional, patient information created for this project. No real patient information will be used.
 
-For M1, the following cases are planned but have not been implemented or executed. They will become automated tests during M2.
+The acceptance cases originally planned during M1 have now been implemented as automated M2 tests.
 
-## 2. Planned Acceptance Cases
+## 2. Test Environment
+
+The tests use Python’s built-in `unittest` framework and require no external packages, API key, or network connection.
+
+The test suite is run from the main project directory with:
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+Five automated tests were executed.
+
+Observed result:
+
+```text
+Ran 5 tests
+
+OK
+```
+
+## 3. Executed Acceptance Cases
 
 ### Case 1: Ordinary Input
 
-**Purpose:** Verify that the gateway detects and masks supported sensitive values in a typical note.
+**Purpose:** Verify that the gateway detects and masks a supported patient name and medical record number.
 
-**Original input:**
+**Input:**
 
-> Patient Jordan Lee, MRN-482731, reported increased anxiety and difficulty sleeping for the past two weeks. The patient is taking sertraline as prescribed. The plan is to continue the current medication and return in two weeks.
+```text
+Patient Jordan Lee, MRN-482731, reported anxiety.
+```
 
-**Expected masked input:**
+**Expected masked text:**
 
-> Patient [[r1:NAME:1]], [[r1:MRN:1]], reported increased anxiety and difficulty sleeping for the past two weeks. The patient is taking sertraline as prescribed. The plan is to continue the current medication and return in two weeks.
+```text
+Patient [[r1:NAME:1]], [[r1:MRN:1]], reported anxiety.
+```
 
-**Expected result:**
+**Checks performed:**
 
-The provider should return a structured summary containing the relevant symptoms, medication, treatment plan, and follow-up information. The gateway should validate and restore any authorized placeholders included in the response.
+- The request returned a `success` status.
+- `Jordan Lee` did not appear in `masked_text`.
+- `MRN-482731` did not appear in `masked_text`.
+- Neither original value appeared in `provider_response`.
+- Both values appeared in `final_output` after successful validation.
 
-Neither `Jordan Lee` nor `MRN-482731` should appear in the outbound masked request.
+**Observed result:** Passed
 
-**Expected status:** Success
+The original name and MRN were protected from the mock provider and restored locally in the final output.
 
 ---
 
 ### Case 2: Repeated Sensitive Value
 
-**Purpose:** Verify that repeated occurrences of the same value use the same placeholder.
+**Purpose:** Verify that repeated occurrences of the same sensitive value use the same placeholder.
 
-**Original input:**
+**Input:**
 
-> Jordan Lee reported increased anxiety. Jordan Lee stated that the symptoms become worse at night. A follow-up appointment was scheduled for Jordan Lee in two weeks.
+```text
+Jordan Lee reported anxiety. Jordan Lee will return next week.
+```
 
-**Expected masked input:**
+**Expected masked text:**
 
-> [[r2:NAME:1]] reported increased anxiety. [[r2:NAME:1]] stated that the symptoms become worse at night. A follow-up appointment was scheduled for [[r2:NAME:1]] in two weeks.
+```text
+[[r2:NAME:1]] reported anxiety. [[r2:NAME:1]] will return next week.
+```
 
-**Expected result:**
+**Checks performed:**
 
-All three occurrences of `Jordan Lee` should be replaced with `[[r2:NAME:1]]`. If that placeholder appears in the provider response, every occurrence should be restored as `Jordan Lee`.
+- The request returned a `success` status.
+- `[[r2:NAME:1]]` appeared twice.
+- `[[r2:NAME:2]]` was not created.
 
-**Expected status:** Success
+**Observed result:** Passed
+
+Both occurrences of `Jordan Lee` used the same placeholder.
 
 ---
 
 ### Case 3: No Sensitive Data
 
-**Purpose:** Verify that the gateway handles a note containing no supported sensitive values.
+**Purpose:** Verify that a note without a supported name or MRN is handled correctly.
 
-**Original input:**
+**Input:**
 
-> The patient reported difficulty sleeping and increased anxiety during the past week. The patient is taking the current medication as prescribed. The plan is to discuss sleep habits and schedule a follow-up appointment in two weeks.
+```text
+The patient reported anxiety and will return next week.
+```
 
-**Expected masked input:**
+**Expected masked text:**
 
-The masked input should be identical to the original input because it contains no patient name or medical record number.
+The masked text should be identical to the original text because no supported sensitive values are present.
 
-**Expected result:**
+**Checks performed:**
 
-The gateway should process the note without creating or restoring any placeholders. The absence of sensitive information should not be treated as an error.
+- The request returned a `success` status.
+- The masked text matched the original input.
+- No placeholder syntax appeared in the masked text.
+- The absence of sensitive data was not treated as an error.
 
-**Expected status:** Success
+**Observed result:** Passed
+
+The gateway processed the request without creating or restoring placeholders.
 
 ---
 
 ### Case 4: Invalid Placeholder Response
 
-**Purpose:** Verify that the gateway rejects a placeholder that was not created for the current request.
+**Purpose:** Verify that the gateway rejects a placeholder that does not belong to the current request.
 
-**Original input:**
+**Input:**
 
-> Patient Jordan Lee, MRN-482731, reported increased anxiety.
+```text
+Jordan Lee reported anxiety.
+```
 
-**Expected masked input:**
+The test uses:
 
-> Patient [[r4:NAME:1]], [[r4:MRN:1]], reported increased anxiety.
+```json
+{
+  "mock_mode": "invalid_placeholder"
+}
+```
 
-**Simulated invalid provider response:**
+The mock provider adds this foreign-request placeholder:
 
-> Presenting Concern: [[r99:NAME:1]] reports increased anxiety.
+```text
+[[r4-foreign:NAME:1]]
+```
 
 **Expected result:**
 
-The validator should reject `[[r99:NAME:1]]` because it belongs to request `r99`, not the current request, `r4`.
+The gateway should return a controlled error, restore no sensitive values, and omit `final_output`.
 
-The program should:
+**Observed output:**
 
-- Return a controlled error.
-- Avoid restoring any sensitive values.
-- Avoid displaying a partially restored response.
-- Never send the original unmasked note as a fallback.
+```json
+{
+  "status": "error",
+  "request_id": "r4",
+  "error_code": "INVALID_PLACEHOLDER",
+  "message": "Placeholder belongs to another request: [[r4-foreign:NAME:1]]"
+}
+```
 
-**Expected status:** Controlled error
+**Checks performed:**
 
-## 3. Evaluation Criteria
-
-Each case will check whether:
-
-- Supported sensitive values were detected.
-- The correct placeholders were created.
-- Protected values were absent from the outbound request.
-- Repeated values used the same placeholder.
-- Only valid placeholders were restored.
-- The final summary preserved important clinical facts.
-- Invalid responses produced controlled errors.
+- The result had an `error` status.
+- The error code was `INVALID_PLACEHOLDER`.
+- No `final_output` field was returned.
+- No partially restored response was displayed.
 - No unmasked fallback request was sent.
 
-## 4. Planned Measurements
+**Observed result:** Passed
 
-During later milestones, the evaluation will record:
+---
 
-- **True positives:** Sensitive values correctly detected
+### Case 5: Different Names in One Request
+
+**Purpose:** Verify that different sensitive values in the same category receive different placeholders.
+
+**Input:**
+
+```text
+Jordan Lee listed Avery Brooks as an emergency contact.
+```
+
+**Expected masked text:**
+
+```text
+[[r5:NAME:1]] listed [[r5:NAME:2]] as an emergency contact.
+```
+
+**Checks performed:**
+
+- The request returned a `success` status.
+- `[[r5:NAME:1]]` appeared in the masked text.
+- `[[r5:NAME:2]]` appeared in the masked text.
+- `Jordan Lee` appeared in the final restored output.
+- `Avery Brooks` appeared in the final restored output.
+
+**Observed result:** Passed
+
+The two names were assigned separate placeholders and restored correctly.
+
+## 4. Evaluation Summary
+
+All five automated M2 tests passed.
+
+The results demonstrate that the prototype can:
+
+- Detect names from the local synthetic term list
+- Detect MRNs matching the documented structured pattern
+- Mask supported values before provider processing
+- Preserve repeated values with one placeholder
+- Distinguish different values in the same request
+- Handle notes containing no supported sensitive data
+- Reject foreign-request placeholders
+- Prevent partial restoration after validation failure
+- Restore valid placeholders locally
+
+The ordinary-input test confirmed that the original name and MRN did not appear in either the masked text or mock-provider response.
+
+## 5. Summary Usefulness
+
+The offline mock provider produces a predictable response using the headings:
+
+- Presenting Concern
+- Symptoms
+- Medication
+- Treatment Plan
+- Follow-Up
+
+It preserves masked placeholders and copies relevant sentences based on fixed keywords.
+
+The response is sufficient for demonstrating the M2 privacy pipeline, but it has limitations:
+
+- It may place the same sentence under more than one heading.
+- It does not understand meaning like a real language model.
+- It may return `Not provided` when its keyword rules do not recognize a sentence.
+- A successful privacy result does not guarantee a high-quality summary.
+
+Prompt usefulness and comparison between two prompt versions are deferred until M3.
+
+## 6. Future Measurements
+
+During M3, the evaluation will expand to record:
+
+- **True positives:** Sensitive-value occurrences correctly detected
 - **False positives:** Non-sensitive text incorrectly detected
-- **False negatives:** Sensitive values not detected
-- **Outbound leaks:** Protected values remaining in the outbound request
-- **Invalid tokens:** Invalid or unauthorized placeholders
+- **False negatives:** Sensitive-value occurrences not detected
+- **Outbound leaks:** Protected-value occurrences remaining in the provider request
+- **Invalid tokens:** Invalid or unauthorized placeholders found
 - **Restoration results:** Placeholders successfully restored or rejected
-- **Summary usefulness:** Whether the summary preserves required facts without inventing information
+- **Precision and recall:** Calculated when their denominators are nonzero
 
-Precision and recall will be calculated when their denominators are nonzero.
+M3 will also add tests for the remaining category, policy behavior, overlapping matches, provider failures, cross-request isolation, and prompt comparison.
 
-## 5. Current Status
-
-These are planned M1 acceptance cases. The complete gateway has not yet been implemented, so no test results are being claimed.
-
-During M2, the relevant cases will be automated, executed, and updated with their observed results.

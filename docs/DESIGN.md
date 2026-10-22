@@ -21,7 +21,7 @@ The gateway will detect sensitive values, replace them with placeholders, valida
 The completed gateway will support three sensitive-data categories:
 
 - **Patient name:** Detected through exact matching with a local fictional term list.
-- **Medical record number:** Detected through a regular-expression pattern.
+- **Medical record number:** Detected through a regular-expression pattern. The MRN pattern supports prefix `MRN-` followed by exactly six digits, such as `MRN-482731`.
 - **Date of birth:** Detected through a regular-expression pattern.
 
 Symptoms, medications, treatment plans, and follow-up instructions will remain visible because the provider needs this clinical content to produce a useful summary.
@@ -53,24 +53,73 @@ This project will not:
 
 This is an educational prototype and is not intended for clinical use.
 
-## 5. M2 Scope
 
-M2 will implement one complete pipeline:
+## 5. M2 Scope and Implementation
 
-`Input → Detection → Masking → Offline Mock Provider → Validation → Restoration → Output`
+Milestone 2 implements one complete, single-request pipeline:
 
-The M2 prototype will:
+`JSON Input → Detection → Masking → Offline Mock Provider → Validation → Restoration → JSON Output`
 
-- Read one fictional plain-text psychiatric note.
-- Detect patient names using a local term list.
-- Detect medical record numbers using a regular expression.
-- Replace detected values with request-specific placeholders.
-- Store the placeholder mapping locally.
-- Send the masked note to a deterministic offline mock provider.
-- Validate the response before restoring authorized values.
-- Return either a structured summary or a controlled error.
+The prototype supports two sensitive-data categories:
 
-Date-of-birth detection and complete `MASK` and `REMOVE` policy behavior will be added during M3.
+- Patient names detected through exact matching with a local synthetic term list
+- Medical record numbers detected with the pattern `\bMRN-\d{6}\b`
+
+For each request, the gateway:
+
+1. Reads a synthetic note from a JSON file.
+2. Detects supported names and medical record numbers.
+3. Replaces detected values with request-specific placeholders.
+4. Creates a local placeholder mapping.
+5. Sends only the masked note to the deterministic offline mock provider.
+6. Validates every reserved placeholder in the provider response.
+7. Restores authorized values after the complete response passes validation.
+8. Returns a successful JSON result or a controlled JSON error.
+
+Repeated occurrences of the same value use the same placeholder. Different values receive different placeholders.
+
+Date-of-birth detection remains planned for M3.
+
+### Detection and Masking
+
+Each detection records its category, original value, starting position, and ending position.
+
+Detected values are replaced using this format:
+
+`[[request-id:CATEGORY:number]]`
+
+Examples include:
+
+- `[[r1:NAME:1]]`
+- `[[r1:NAME:2]]`
+- `[[r1:MRN:1]]`
+
+Repeated occurrences of the same value use the same placeholder. Different values receive different placeholders.
+
+For example:
+
+```text
+Jordan Lee, MRN-482731, reported anxiety. Jordan Lee will return in two weeks.
+```
+
+becomes:
+
+```text
+[[r1:NAME:1]], [[r1:MRN:1]], reported anxiety. [[r1:NAME:1]] will return in two weeks.
+```
+
+The local mapping for this request would contain:
+
+```python
+{
+    "[[r1:NAME:1]]": "Jordan Lee",
+    "[[r1:MRN:1]]": "MRN-482731"
+}
+```
+
+The mapping remains local. It is not sent to the mock provider or included in the JSON output.
+
+Date-of-birth detection, `MASK` and `REMOVE` policy behavior, overlap handling, and full cross-request isolation are deferred until M3.
 
 ## 6. Language and Runtime Choice
 
@@ -92,7 +141,7 @@ Java could implement the same gateway and offers stronger compile-time type chec
 
 - **Development speed:** Python requires less setup and boilerplate for a small command-line application. Java’s additional structure may be more useful in a larger system.
 
-Python was selected because its text-processing features and development speed best match this project. Type hints, validation, and automated tests will be used to reduce the risks of dynamic typing.
+Python was selected because its text-processing features and development speed match this project. Input validation and automated tests help reduce the risks of dynamic typing.
 
 ## 7. System Design
 
@@ -112,29 +161,34 @@ The following must remain local:
 - The placeholder mapping
 - Validation and restoration operations
 
-The provider may receive:
+The future external provider may receive:
 
 - The summarization prompt
 - The masked note
 - Request-specific placeholders
 - Clinical content needed for summarization
 
+The M2 mock provider receives only the masked note. It uses fixed keyword rules to create a predictable structured response without calling an external service.
+
 Before restoration, every placeholder must be correctly formatted, belong to the current request, and exist in that request’s mapping.
 
-### Component Responsibilities
+### Implemented Components
 
-- **Input handler:** Reads one plain-text note.
-- **Detector:** Locates supported sensitive values.
-- **Masking and mapping components:** Create placeholders and store their local mappings.
-- **Prompt builder:** Combines the prompt with the masked note.
-- **Mock provider:** Produces a predictable offline summary.
-- **Response validator:** Rejects invalid or unauthorized placeholders.
-- **Restoration component:** Restores authorized values.
-- **Output handler:** Displays the summary or controlled error.
+- **`src/main.py`:** Reads one JSON request file, calls the gateway pipeline, and prints one JSON result.
+- **`process_request()`:** Coordinates the complete request pipeline.
+- **`load_names()`:** Loads the local synthetic term list from `data/names.txt`.
+- **`detect_sensitive_data()`:** Detects exact names and structured MRNs.
+- **`mask_sensitive_data()`:** Creates placeholders and the request-local mapping.
+- **`mock_provider()`:** Produces a deterministic structured summary without using a network or real AI API.
+- **`validate_provider_response()`:** Rejects malformed, unknown, and foreign-request placeholders.
+- **`restore_sensitive_data()`:** Restores authorized values after successful validation.
+- **`create_error()`:** Produces consistent JSON-compatible error results.
+
+The placeholder mapping exists only within the processing of the current request. It is not included in the provider input or returned in the JSON output.
 
 ## 8. Placeholder Design
 
-Placeholders will use this format:
+The M2 prototype uses this placeholder format:
 
 `[[request-id:CATEGORY:number]]`
 
@@ -164,20 +218,25 @@ The masked note will be appended as:
 
 This prompt is intended to create a predictable summary while preserving the placeholders required by the gateway.
 
+The M2 mock provider does not interpret this prompt like a real AI model. Instead, it uses deterministic keyword rules to organize the masked note under the same headings. This allows the masking, validation, and restoration pipeline to be tested without a network connection or API.
+
 ## 10. Key Design Decisions
 
-- The program will use a command-line interface and plain-text input.
-- Only fictional information created for testing will be used.
-- Placeholder mappings will remain local and separate for each request.
-- A deterministic offline mock provider will make testing reproducible without requiring an API.
+- The program reads synthetic note text from a JSON request file.
+- Only fictional information created for testing is used.
+- Placeholder mappings remain local to the current request.
+- The deterministic offline mock provider makes testing reproducible without an API or network connection.
+- The complete provider response is validated before any values are restored.
+- JSON file handling is separated into `src/main.py`, while gateway behavior is implemented in `src/gateway.py`.
+- The optional `invalid_placeholder` mock mode exists only to test controlled-error behavior.
 
 ## 11. M1 Tech Spike
 
 A small Python Tech Spike was completed to confirm that the selected runtime could read and echo plain-text input.
 
-- **Runtime:** Python [INSERT EXACT VERSION]
+- **Runtime:** Python 3.14.7 (64-bit)
 - **Source file:** `src/tech_spike.py`
-- **Exact command:** `[INSERT EXACT COMMAND USED]`
+- **Exact command:** `& C:\Users\paige\AppData\Local\Python\pythoncore-3.14-64\python.exe c:/Users/paige/AI_Privacy_Gateway/AI_Privacy_Project/src/tech_spike.py`
 - **Input:** `Patient Jordan Lee reported increased anxiety.`
 
 **Observed output:**
@@ -188,4 +247,4 @@ Received note:
 Patient Jordan Lee reported increased anxiety.
 ```
 
-The output matched the entered text, confirming that the Python runtime and basic command-line input/output worked correctly.
+The output matched the entered text, confirming that the Python runtime and basic command-line input/output worked correctly. 
